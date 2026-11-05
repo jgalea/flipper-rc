@@ -29,6 +29,11 @@
 
 #define ZONES_FILE APP_DATA_PATH("zones.txt")
 #define BEST_FILE APP_DATA_PATH("best.txt")
+#define CARS_FILE APP_DATA_PATH("cars.txt")
+#define BAY_BEST_FILE APP_DATA_PATH("bay_best.txt")
+#define PAUSE_MS 3000
+#define MENU_ITEMS 4
+#define MENU_VISIBLE 3
 
 static const char* const challenges[] = {
     "Reverse into bay %c",
@@ -49,10 +54,44 @@ static const char* const challenges[] = {
 #define CHALLENGE_COUNT (sizeof(challenges) / sizeof(challenges[0]))
 
 typedef enum {
+    EndFront,
+    EndRear,
+} CarEnd;
+
+typedef struct {
+    const char* text;
+    CarEnd end;
+} BayChallenge;
+
+static const char* const end_names[] = {"FRONT", "REAR"};
+
+static const BayChallenge bay_challenges[] = {
+    {"Reverse into the bay", EndRear},
+    {"Nose into the bay", EndFront},
+    {"Slalom the cones, then back in", EndRear},
+    {"Spin 180 and back in", EndRear},
+    {"Three-point turn, nose in", EndFront},
+    {"Figure-8, then nose in", EndFront},
+    {"Reverse around the corner into the bay", EndRear},
+    {"Drive a full circle, then nose in", EndFront},
+    {"Approach alongside, then back in", EndRear},
+    {"U-turn, then nose in", EndFront},
+    {"Weave the cones, then reverse in", EndRear},
+    {"Back in at an angle", EndRear},
+    {"Nose in at an angle", EndFront},
+};
+#define BAY_CHALLENGE_COUNT (sizeof(bay_challenges) / sizeof(bay_challenges[0]))
+
+typedef enum {
     ScreenMenu,
     ScreenLearn,
     ScreenPlay,
     ScreenResult,
+    ScreenLearnCar,
+    ScreenBayReady,
+    ScreenBayPlay,
+    ScreenBayPause,
+    ScreenBayResult,
 } Screen;
 
 typedef enum {
@@ -99,6 +138,14 @@ typedef struct {
     uint32_t best_ms;
     uint32_t session_best_ms;
     bool new_best;
+
+    char cars[2][KEY_LEN];
+    uint8_t car_idx;
+    uint32_t bay_acc;
+    uint32_t seg_start;
+    uint32_t pause_until;
+    uint32_t bay_best_ms;
+    uint32_t bay_session_best_ms;
 
     char last_key[KEY_LEN];
     uint32_t last_tick;
@@ -158,28 +205,68 @@ static void load_zones(App* app) {
     storage_file_free(file);
 }
 
-static void save_best(App* app) {
+static bool cars_complete(const App* app) {
+    return app->cars[0][0] != '\0' && app->cars[1][0] != '\0';
+}
+
+static void save_cars(App* app) {
     storage_common_mkdir(app->storage, APP_DATA_PATH(""));
     File* file = storage_file_alloc(app->storage);
-    if(storage_file_open(file, BEST_FILE, FSAM_WRITE, FSOM_CREATE_ALWAYS)) {
+    if(storage_file_open(file, CARS_FILE, FSAM_WRITE, FSOM_CREATE_ALWAYS)) {
+        FuriString* out = furi_string_alloc();
+        furi_string_cat_printf(out, "F=%s\nR=%s\n", app->cars[0], app->cars[1]);
+        storage_file_write(file, furi_string_get_cstr(out), furi_string_size(out));
+        furi_string_free(out);
+    }
+    storage_file_close(file);
+    storage_file_free(file);
+}
+
+static void load_cars(App* app) {
+    File* file = storage_file_alloc(app->storage);
+    if(storage_file_open(file, CARS_FILE, FSAM_READ, FSOM_OPEN_EXISTING)) {
+        char buf[2 * (KEY_LEN + 4) + 1];
+        size_t n = storage_file_read(file, buf, sizeof(buf) - 1);
+        buf[n] = '\0';
+        char* line = buf;
+        while(line && *line) {
+            char* next = strchr(line, '\n');
+            if(next) *next++ = '\0';
+            if(line[1] == '=') {
+                if(line[0] == 'F') strlcpy(app->cars[0], line + 2, KEY_LEN);
+                if(line[0] == 'R') strlcpy(app->cars[1], line + 2, KEY_LEN);
+            }
+            line = next;
+        }
+    }
+    storage_file_close(file);
+    storage_file_free(file);
+}
+
+static void save_best(App* app, const char* path, uint32_t value) {
+    storage_common_mkdir(app->storage, APP_DATA_PATH(""));
+    File* file = storage_file_alloc(app->storage);
+    if(storage_file_open(file, path, FSAM_WRITE, FSOM_CREATE_ALWAYS)) {
         char buf[16];
-        int len = snprintf(buf, sizeof(buf), "%lu\n", (unsigned long)app->best_ms);
+        int len = snprintf(buf, sizeof(buf), "%lu\n", (unsigned long)value);
         storage_file_write(file, buf, len);
     }
     storage_file_close(file);
     storage_file_free(file);
 }
 
-static void load_best(App* app) {
+static uint32_t load_best(App* app, const char* path) {
+    uint32_t value = 0;
     File* file = storage_file_alloc(app->storage);
-    if(storage_file_open(file, BEST_FILE, FSAM_READ, FSOM_OPEN_EXISTING)) {
+    if(storage_file_open(file, path, FSAM_READ, FSOM_OPEN_EXISTING)) {
         char buf[16];
         size_t n = storage_file_read(file, buf, sizeof(buf) - 1);
         buf[n] = '\0';
-        app->best_ms = strtoul(buf, NULL, 10);
+        value = strtoul(buf, NULL, 10);
     }
     storage_file_close(file);
     storage_file_free(file);
+    return value;
 }
 
 static void format_time(char* out, size_t size, uint32_t ms) {
@@ -345,20 +432,72 @@ static void start_game(App* app) {
     app->scan_enabled = true;
 }
 
-static void finish_game(App* app) {
+static void record_result(
+    App* app,
+    uint32_t elapsed,
+    uint32_t* session_best,
+    uint32_t* best,
+    const char* path) {
     app->scan_enabled = false;
-    uint32_t elapsed = furi_get_tick() - app->start_tick;
     app->end_ms = elapsed + (uint32_t)app->misses * PENALTY_MS;
-    if(app->session_best_ms == 0 || app->end_ms < app->session_best_ms) {
-        app->session_best_ms = app->end_ms;
-    }
+    if(*session_best == 0 || app->end_ms < *session_best) *session_best = app->end_ms;
     app->new_best = false;
-    if(app->best_ms == 0 || app->end_ms < app->best_ms) {
-        app->best_ms = app->end_ms;
+    if(*best == 0 || app->end_ms < *best) {
+        *best = app->end_ms;
         app->new_best = true;
-        save_best(app);
+        save_best(app, path, *best);
     }
+}
+
+static void finish_game(App* app) {
+    record_result(
+        app, furi_get_tick() - app->start_tick, &app->session_best_ms, &app->best_ms, BEST_FILE);
     app->screen = ScreenResult;
+}
+
+static void start_bay(App* app) {
+    uint8_t used[STEPS];
+    for(uint8_t i = 0; i < STEPS; i++) {
+        uint8_t c;
+        bool dup;
+        do {
+            c = furi_hal_random_get() % BAY_CHALLENGE_COUNT;
+            dup = false;
+            for(uint8_t j = 0; j < i; j++) dup |= (used[j] == c);
+        } while(dup);
+        used[i] = c;
+        app->step_challenge[i] = c;
+    }
+    app->step = 0;
+    app->misses = 0;
+    app->miss_until = 0;
+    app->bay_acc = 0;
+    app->screen = ScreenBayReady;
+    app->scan_enabled = false;
+}
+
+static void begin_bay(App* app) {
+    app->last_key[0] = '\0';
+    app->seg_start = furi_get_tick();
+    app->screen = ScreenBayPlay;
+    app->scan_enabled = true;
+}
+
+static void finish_bay(App* app) {
+    record_result(
+        app,
+        app->bay_acc,
+        &app->bay_session_best_ms,
+        &app->bay_best_ms,
+        BAY_BEST_FILE);
+    app->screen = ScreenBayResult;
+}
+
+static void bay_tick(App* app) {
+    if(app->screen == ScreenBayPause && furi_get_tick() >= app->pause_until) {
+        app->seg_start = furi_get_tick();
+        app->screen = ScreenBayPlay;
+    }
 }
 
 static int find_zone(const App* app, const char* key) {
@@ -393,6 +532,43 @@ static void handle_tag(App* app, const char* key) {
             save_zones(app);
             app->scan_enabled = false;
             app->screen = ScreenMenu;
+        }
+    } else if(app->screen == ScreenLearnCar) {
+        if(app->car_idx == 1 && strcmp(app->cars[0], key) == 0) {
+            snprintf(app->learn_msg, sizeof(app->learn_msg), "Same as front tag");
+            app->learn_msg_until = now + 2000;
+            notification_message(app->notifications, &sequence_error);
+            return;
+        }
+        strlcpy(app->cars[app->car_idx], key, KEY_LEN);
+        notification_message(app->notifications, &sequence_success);
+        app->car_idx++;
+        app->learn_msg[0] = '\0';
+        if(app->car_idx >= 2) {
+            save_cars(app);
+            app->scan_enabled = false;
+            app->screen = ScreenMenu;
+        }
+    } else if(app->screen == ScreenBayPlay) {
+        int end = -1;
+        if(strcmp(app->cars[0], key) == 0) end = EndFront;
+        if(strcmp(app->cars[1], key) == 0) end = EndRear;
+        if(end < 0) return;
+        if(end == (int)bay_challenges[app->step_challenge[app->step]].end) {
+            notification_message(app->notifications, &sequence_success);
+            app->bay_acc += now - app->seg_start;
+            app->step++;
+            if(app->step >= STEPS) {
+                finish_bay(app);
+            } else {
+                app->pause_until = now + PAUSE_MS;
+                app->screen = ScreenBayPause;
+            }
+        } else {
+            app->misses++;
+            snprintf(app->miss_msg, sizeof(app->miss_msg), "Miss: that is the %s", end_names[end]);
+            app->miss_until = now + FLASH_MS;
+            notification_message(app->notifications, &sequence_error);
         }
     } else if(app->screen == ScreenPlay) {
         int zone = find_zone(app, key);
@@ -448,26 +624,33 @@ static void draw_callback(Canvas* canvas, void* context) {
         canvas_set_font(canvas, FontPrimary);
         canvas_draw_str(canvas, 2, 11, "RC Parking");
         canvas_set_font(canvas, FontSecondary);
-        if(app->best_ms) {
+        bool bay_item = app->menu_sel == 1 || app->menu_sel == 3;
+        uint32_t shown_best = bay_item ? app->bay_best_ms : app->best_ms;
+        if(shown_best) {
             char t[16];
-            format_time(t, sizeof(t), app->best_ms);
+            format_time(t, sizeof(t), shown_best);
             snprintf(buf, sizeof(buf), "Best %s", t);
             canvas_draw_str_aligned(canvas, 126, 3, AlignRight, AlignTop, buf);
         }
-        const char* items[2] = {"Play", "Learn zone tags"};
-        for(uint8_t i = 0; i < 2; i++) {
-            int y = 22 + i * 14;
+        const char* items[MENU_ITEMS] = {
+            "Zone game", "Bay game", "Learn zone tags", "Learn car tags"};
+        uint8_t first = app->menu_sel >= MENU_VISIBLE ? app->menu_sel - MENU_VISIBLE + 1 : 0;
+        for(uint8_t row = 0; row < MENU_VISIBLE; row++) {
+            uint8_t i = first + row;
+            int y = 15 + row * 13;
             if(i == app->menu_sel) {
-                canvas_draw_box(canvas, 0, y - 1, 128, 13);
+                canvas_draw_box(canvas, 0, y - 1, 128, 12);
                 canvas_set_color(canvas, ColorWhite);
             }
-            canvas_draw_str(canvas, 6, y + 9, items[i]);
+            canvas_draw_str(canvas, 6, y + 8, items[i]);
             canvas_set_color(canvas, ColorBlack);
         }
-        if(!zones_complete(app)) {
-            canvas_draw_str(canvas, 2, 62, "Learn all 4 zones to play");
+        if(bay_item) {
+            canvas_draw_str(
+                canvas, 2, 62, cars_complete(app) ? "Car tags ready" : "Learn car tags to play");
         } else {
-            canvas_draw_str(canvas, 2, 62, "Zones A-D ready");
+            canvas_draw_str(
+                canvas, 2, 62, zones_complete(app) ? "Zones A-D ready" : "Learn all 4 zones to play");
         }
     } else if(app->screen == ScreenLearn) {
         canvas_set_font(canvas, FontPrimary);
@@ -482,6 +665,63 @@ static void draw_callback(Canvas* canvas, void* context) {
         } else {
             snprintf(buf, sizeof(buf), "Learned %d of %d", app->learn_idx, ZONES);
             canvas_draw_str(canvas, 2, 52, buf);
+        }
+    } else if(app->screen == ScreenLearnCar) {
+        canvas_set_font(canvas, FontPrimary);
+        snprintf(buf, sizeof(buf), "Learn %s tag", end_names[app->car_idx]);
+        canvas_draw_str(canvas, 2, 11, buf);
+        canvas_set_font(canvas, FontSecondary);
+        canvas_draw_str(canvas, 2, 26, "Hold the car tag against");
+        canvas_draw_str(canvas, 2, 36, "the Flipper back (LF/NFC)");
+        if(app->learn_msg[0] && now < app->learn_msg_until) {
+            canvas_set_font(canvas, FontPrimary);
+            canvas_draw_str(canvas, 2, 52, app->learn_msg);
+        } else {
+            snprintf(buf, sizeof(buf), "Learned %d of 2", app->car_idx);
+            canvas_draw_str(canvas, 2, 52, buf);
+        }
+    } else if(app->screen == ScreenBayReady) {
+        canvas_set_font(canvas, FontPrimary);
+        canvas_draw_str(canvas, 2, 11, "Bay game");
+        canvas_set_font(canvas, FontSecondary);
+        canvas_draw_str(canvas, 2, 26, "4 steps, front or rear");
+        canvas_draw_str(canvas, 2, 36, "tag must reach the bay");
+        canvas_set_font(canvas, FontPrimary);
+        canvas_draw_str_aligned(canvas, 64, 54, AlignCenter, AlignCenter, "Press OK to start");
+    } else if(app->screen == ScreenBayPlay || app->screen == ScreenBayPause) {
+        uint32_t running = app->screen == ScreenBayPlay ? now - app->seg_start : 0;
+        char t[16];
+        format_time(t, sizeof(t), app->bay_acc + running + (uint32_t)app->misses * PENALTY_MS);
+        canvas_set_font(canvas, FontPrimary);
+        snprintf(buf, sizeof(buf), "Step %d/%d", app->step + (app->screen == ScreenBayPlay ? 1 : 0), STEPS);
+        canvas_draw_str(canvas, 2, 10, buf);
+        canvas_draw_str_aligned(canvas, 126, 0, AlignRight, AlignTop, t);
+        canvas_set_font(canvas, FontSecondary);
+        snprintf(buf, sizeof(buf), "Misses: %d", app->misses);
+        canvas_draw_str(canvas, 2, 20, buf);
+        if(app->screen == ScreenBayPause) {
+            canvas_set_font(canvas, FontPrimary);
+            canvas_draw_str_aligned(canvas, 64, 36, AlignCenter, AlignCenter, "Drive away");
+            canvas_set_font(canvas, FontSecondary);
+            snprintf(
+                buf,
+                sizeof(buf),
+                "Next step in %lus",
+                (unsigned long)((app->pause_until - now + 999) / 1000));
+            canvas_draw_str_aligned(canvas, 64, 52, AlignCenter, AlignCenter, buf);
+        } else {
+            const BayChallenge* ch = &bay_challenges[app->step_challenge[app->step]];
+            draw_wrapped(canvas, ch->text, 2, 31, 21, 2);
+            if(now < app->miss_until) {
+                canvas_draw_box(canvas, 0, 52, 128, 12);
+                canvas_set_color(canvas, ColorWhite);
+                canvas_draw_str_aligned(canvas, 64, 58, AlignCenter, AlignCenter, app->miss_msg);
+                canvas_set_color(canvas, ColorBlack);
+            } else {
+                snprintf(buf, sizeof(buf), "Reach with: %s", end_names[ch->end]);
+                canvas_set_font(canvas, FontPrimary);
+                canvas_draw_str_aligned(canvas, 64, 58, AlignCenter, AlignCenter, buf);
+            }
         }
     } else if(app->screen == ScreenPlay) {
         uint32_t elapsed = now - app->start_tick + (uint32_t)app->misses * PENALTY_MS;
@@ -530,9 +770,10 @@ static void draw_callback(Canvas* canvas, void* context) {
         snprintf(buf, sizeof(buf), "Total: %s", t);
         canvas_draw_str(canvas, 2, 47, buf);
         canvas_set_font(canvas, FontSecondary);
-        format_time(t, sizeof(t), app->session_best_ms);
+        bool bay = app->screen == ScreenBayResult;
+        format_time(t, sizeof(t), bay ? app->bay_session_best_ms : app->session_best_ms);
         char t2[16];
-        format_time(t2, sizeof(t2), app->best_ms);
+        format_time(t2, sizeof(t2), bay ? app->bay_best_ms : app->best_ms);
         snprintf(buf, sizeof(buf), "Session %s  All-time %s", t, t2);
         canvas_draw_str(canvas, 2, 57, buf);
         canvas_draw_str_aligned(canvas, 126, 62, AlignRight, AlignBottom, "OK: again");
@@ -562,10 +803,20 @@ static bool handle_input(App* app, const InputEvent* input) {
     }
     if(app->screen == ScreenMenu) {
         if(input->key == InputKeyUp || input->key == InputKeyDown) {
-            app->menu_sel = !app->menu_sel;
+            app->menu_sel = (app->menu_sel + (input->key == InputKeyDown ? 1 : MENU_ITEMS - 1)) %
+                            MENU_ITEMS;
         } else if(input->key == InputKeyOk) {
             if(app->menu_sel == 0) {
                 if(zones_complete(app)) start_game(app);
+            } else if(app->menu_sel == 1) {
+                if(cars_complete(app)) start_bay(app);
+            } else if(app->menu_sel == 3) {
+                app->cars[0][0] = '\0';
+                app->cars[1][0] = '\0';
+                app->car_idx = 0;
+                app->learn_msg[0] = '\0';
+                app->screen = ScreenLearnCar;
+                app->scan_enabled = true;
             } else {
                 for(uint8_t i = 0; i < ZONES; i++) app->zones[i][0] = '\0';
                 app->learn_idx = 0;
@@ -576,6 +827,10 @@ static bool handle_input(App* app, const InputEvent* input) {
         }
     } else if(app->screen == ScreenResult && input->key == InputKeyOk) {
         start_game(app);
+    } else if(app->screen == ScreenBayReady && input->key == InputKeyOk) {
+        begin_bay(app);
+    } else if(app->screen == ScreenBayResult && input->key == InputKeyOk) {
+        start_bay(app);
     }
     return true;
 }
@@ -589,7 +844,9 @@ int32_t rc_parking_app(void* p) {
     app->storage = furi_record_open(RECORD_STORAGE);
     app->notifications = furi_record_open(RECORD_NOTIFICATION);
     load_zones(app);
-    load_best(app);
+    load_cars(app);
+    app->best_ms = load_best(app, BEST_FILE);
+    app->bay_best_ms = load_best(app, BAY_BEST_FILE);
 
     app->view_port = view_port_alloc();
     view_port_draw_callback_set(app->view_port, draw_callback, app);
@@ -614,6 +871,8 @@ int32_t rc_parking_app(void* p) {
             running = handle_input(app, &event.input);
         } else if(event.type == EventTag) {
             handle_tag(app, event.key);
+        } else if(event.type == EventTick) {
+            bay_tick(app);
         }
         furi_mutex_release(app->mutex);
         view_port_update(app->view_port);

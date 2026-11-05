@@ -6,7 +6,7 @@ App(
     requires=["gui", "storage", "notification", "nfc"],
     stack_size=4 * 1024,
     fap_category="Tools",
-    fap_description="Parking skills game for RC cars using floor tags (LF RFID and NFC)",
+    fap_description="Parking skills games for RC cars using floor tags and car tags (LF RFID and NFC)",
     fap_author="Jean Galea",
-    fap_version="1.0",
+    fap_version="1.1",
 )
