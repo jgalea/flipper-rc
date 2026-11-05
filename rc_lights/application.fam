@@ -1,0 +1,13 @@
+App(
+    appid="rc_lights",
+    name="RC Lights",
+    apptype=FlipperAppType.EXTERNAL,
+    entry_point="rc_lights_app",
+    requires=["gui", "bt"],
+    stack_size=2 * 1024,
+    fap_libs=["ble_profile"],
+    fap_category="Bluetooth",
+    fap_description="Bluetooth keyboard that sends F13-F20 so a computer can run light commands.",
+    fap_author="Jean Galea",
+    fap_version="1.0",
+)

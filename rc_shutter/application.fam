@@ -1,0 +1,13 @@
+App(
+    appid="rc_shutter",
+    name="RC Shutter",
+    apptype=FlipperAppType.EXTERNAL,
+    entry_point="rc_shutter_app",
+    requires=["gui", "bt"],
+    stack_size=2 * 1024,
+    fap_libs=["ble_profile"],
+    fap_category="Bluetooth",
+    fap_description="Bluetooth camera shutter remote: OK sends Volume Up to the paired phone.",
+    fap_author="Jean Galea",
+    fap_version="1.0",
+)

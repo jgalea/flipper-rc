@@ -1,0 +1,12 @@
+App(
+    appid="rc_parking",
+    name="RC Parking",
+    apptype=FlipperAppType.EXTERNAL,
+    entry_point="rc_parking_app",
+    requires=["gui", "storage", "notification", "nfc"],
+    stack_size=4 * 1024,
+    fap_category="Tools",
+    fap_description="Parking skills game for RC cars using floor tags (LF RFID and NFC)",
+    fap_author="Jean Galea",
+    fap_version="1.0",
+)

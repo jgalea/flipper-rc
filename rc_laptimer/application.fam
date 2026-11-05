@@ -1,0 +1,12 @@
+App(
+    appid="rc_laptimer",
+    name="RC Lap Timer",
+    apptype=FlipperAppType.EXTERNAL,
+    entry_point="rc_laptimer_app",
+    requires=["gui", "notification"],
+    stack_size=2 * 1024,
+    fap_category="GPIO",
+    fap_description="RC car lap timer using an IR break-beam sensor on pin C3.",
+    fap_author="Jean Galea",
+    fap_version="1.0",
+)

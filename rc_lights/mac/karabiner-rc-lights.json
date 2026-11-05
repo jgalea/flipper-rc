@@ -1,0 +1,133 @@
+{
+  "title": "RC Lights remote (F13-F20 to govee)",
+  "rules": [
+    {
+      "description": "F13: Lights on",
+      "manipulators": [
+        {
+          "type": "basic",
+          "from": {
+            "key_code": "f13"
+          },
+          "to": [
+            {
+              "shell_command": "$HOME/.local/bin/govee on Lamps"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "description": "F14: Lights off",
+      "manipulators": [
+        {
+          "type": "basic",
+          "from": {
+            "key_code": "f14"
+          },
+          "to": [
+            {
+              "shell_command": "$HOME/.local/bin/govee off Lamps"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "description": "F15: Dim",
+      "manipulators": [
+        {
+          "type": "basic",
+          "from": {
+            "key_code": "f15"
+          },
+          "to": [
+            {
+              "shell_command": "$HOME/.local/bin/govee brightness Lamps 20"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "description": "F16: Bright",
+      "manipulators": [
+        {
+          "type": "basic",
+          "from": {
+            "key_code": "f16"
+          },
+          "to": [
+            {
+              "shell_command": "$HOME/.local/bin/govee brightness Lamps 100"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "description": "F17: Warm white",
+      "manipulators": [
+        {
+          "type": "basic",
+          "from": {
+            "key_code": "f17"
+          },
+          "to": [
+            {
+              "shell_command": "$HOME/.local/bin/govee temp Lamps 2700"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "description": "F18: Red",
+      "manipulators": [
+        {
+          "type": "basic",
+          "from": {
+            "key_code": "f18"
+          },
+          "to": [
+            {
+              "shell_command": "$HOME/.local/bin/govee color Lamps 255 0 0"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "description": "F19: Green",
+      "manipulators": [
+        {
+          "type": "basic",
+          "from": {
+            "key_code": "f19"
+          },
+          "to": [
+            {
+              "shell_command": "$HOME/.local/bin/govee color Lamps 0 255 0"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "description": "F20: Blue",
+      "manipulators": [
+        {
+          "type": "basic",
+          "from": {
+            "key_code": "f20"
+          },
+          "to": [
+            {
+              "shell_command": "$HOME/.local/bin/govee color Lamps 0 0 255"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
