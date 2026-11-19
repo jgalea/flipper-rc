@@ -10,7 +10,7 @@ Use a digital break-beam or obstacle sensor module whose output goes low when th
 - Sensor ground to GND
 - Sensor power from the 3V3 pin, not 5V, unless the module is documented as 3.3V logic when powered from 5V
 
-The pin is configured as an input with pull-up and counts falling edges.
+The pin is an input with pull-up, read every millisecond, and each falling edge counts as a pass. (Pin C3 shares its interrupt line with the OK button, so the app polls it instead of using an interrupt.)
 
 ## Buttons
 

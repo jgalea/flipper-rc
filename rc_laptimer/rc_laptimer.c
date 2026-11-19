@@ -39,7 +39,8 @@ typedef struct {
     uint32_t laps[RECENT_LAPS];
     uint16_t count;
     FuriMessageQueue* queue;
-    uint32_t last_isr_tick;
+    uint32_t last_beam_tick;
+    bool beam_high;
 } App;
 
 static void format_time(char* buf, size_t size, uint32_t ms) {
@@ -52,11 +53,15 @@ static void format_time(char* buf, size_t size, uint32_t ms) {
     }
 }
 
-static void beam_isr(void* ctx) {
+static void beam_poll(void* ctx) {
     App* app = ctx;
+    bool high = furi_hal_gpio_read(BEAM_PIN);
+    bool fell = app->beam_high && !high;
+    app->beam_high = high;
+    if(!fell) return;
     uint32_t now = furi_get_tick();
-    if(now - app->last_isr_tick < BEAM_GLITCH_MS) return;
-    app->last_isr_tick = now;
+    if(now - app->last_beam_tick < BEAM_GLITCH_MS) return;
+    app->last_beam_tick = now;
     AppEvent event = {.type = EventBeam, .tick = now};
     furi_message_queue_put(app->queue, &event, 0);
 }
@@ -149,8 +154,10 @@ int32_t rc_laptimer_app(void* p) {
     NotificationApp* notifications = furi_record_open(RECORD_NOTIFICATION);
     notification_message(notifications, &sequence_display_backlight_enforce_on);
 
-    furi_hal_gpio_init(BEAM_PIN, GpioModeInterruptFall, GpioPullUp, GpioSpeedLow);
-    furi_hal_gpio_add_int_callback(BEAM_PIN, beam_isr, app);
+    furi_hal_gpio_init(BEAM_PIN, GpioModeInput, GpioPullUp, GpioSpeedLow);
+    app->beam_high = furi_hal_gpio_read(BEAM_PIN);
+    FuriTimer* beam_timer = furi_timer_alloc(beam_poll, FuriTimerTypePeriodic, app);
+    furi_timer_start(beam_timer, 1);
 
     bool running = true;
     AppEvent event;
@@ -186,7 +193,8 @@ int32_t rc_laptimer_app(void* p) {
         view_port_update(view_port);
     }
 
-    furi_hal_gpio_remove_int_callback(BEAM_PIN);
+    furi_timer_stop(beam_timer);
+    furi_timer_free(beam_timer);
     furi_hal_gpio_init(BEAM_PIN, GpioModeAnalog, GpioPullNo, GpioSpeedLow);
 
     notification_message(notifications, &sequence_display_backlight_enforce_auto);
